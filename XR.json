@@ -1,0 +1,235 @@
+{
+  "name": "XR_Dash",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "/robot/telemetry",
+        "options": {
+          "responseCode": {
+            "values": {}
+          }
+        }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -576,
+        -48
+      ],
+      "id": "d51867dc-effa-49e4-9e66-cc5289372667",
+      "name": "Webhook",
+      "webhookId": "ef37f130-519d-43d0-ab80-80473c21a602"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "a88ca380-4e29-4734-8ae4-dad02f0ff640",
+              "leftValue": "={{$json[\"body\"][\"alerts\"] && $json[\"body\"][\"alerts\"].length > 0}}\n",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -368,
+        -48
+      ],
+      "id": "d44006d2-27e1-441f-ac7d-4971ad08d1b1",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst results = [];\n\nfor (const item of items) {\n\n  const alerts = item.json.body.alerts;\n\n  if (!alerts || alerts.length === 0) {\n    continue;\n  }\n\n  for (const alert of alerts) {\n\n    const health = alert.health_percent;\n\n    let anomaly_probability;\n    let issue;\n    let severity;\n\n    if (health <= 25) {\n      anomaly_probability = 99.9;\n      issue = \"Severe mechanical degradation detected\";\n      severity = \"CRITICAL\";\n    } \n    else if (health <= 50) {\n      anomaly_probability = 75.0;\n      issue = \"Performance degradation detected\";\n      severity = \"HIGH\";\n    } \n    else if (health <= 75) {\n      anomaly_probability = 40.0;\n      issue = \"Early wear trend observed\";\n      severity = \"MEDIUM\";\n    } \n    else {\n      anomaly_probability = 10.0;\n      issue = \"Normal operational condition\";\n      severity = \"LOW\";\n    }\n\n    results.push({\n      json: {\n        ...alert,\n        robot_id: item.json.body.robot_id,\n        timestamp: item.json.body.timestamp,\n        anomaly_probability,\n        issue,\n        severity\n      }\n    });\n  }\n}\n\nreturn results;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -160,
+        -144
+      ],
+      "id": "542d9ed1-40b7-4c7b-8e47-03675226cf81",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are an expert Industrial Reliability Engineer and Maintenance Assistant. Your task is to analyze incoming sensor alerts from robotic systems and draft a professional, concise technical email for a maintenance technician.\n\nUse the following data provided in the input:\n- Robot ID: {{ $json.robot_id }}\n- Component: {{ $json.motor }}\n- Detected Issue: {{ $json.issue }}\n- Severity: {{ $json.severity }}\n- Health Percentage: {{ $json.health_percent }}%\n- Anomaly Probability: {{ $json.anomaly_probability }}%\n\nGuidelines for the email:\n1. Tone: Professional, urgent (if Critical/High), and data-driven.\n2. Structure: \n   - Start with a clear \"Action Required\" statement.\n   - Provide a brief technical analysis of what the \"Anomaly Probability\" implies for that specific severity.\n   - Suggest 2-3 immediate troubleshooting steps (e.g., check lubrication, inspect wiring, or emergency stop).\n3. Formatting: Use bullet points for readability on mobile devices.\nProvide ONLY the technical analysis and troubleshooting steps. Do not include a Subject line, greetings, or sign-offs\nFinal Output: Provide only the email body text.",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        48,
+        -48
+      ],
+      "id": "14e557ae-a7b5-4cdc-9d9b-f9da9efb4663",
+      "name": "AI Agent",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "model": "llama-3.1-8b-instant",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        48,
+        144
+      ],
+      "id": "242a8ff9-e489-49c4-ab09-3e3d8f1eb196",
+      "name": "Groq Chat Model",
+      "credentials": {
+        "groqApi": {
+          "id": "efWMeoEecxGV1z8a",
+          "name": "Groq account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "sibisubhash24700@gmail.com",
+        "subject": "={{ $json.severity === 'CRITICAL' ? '🚨' : ($json.severity === 'HIGH' ? '⚠️' : 'ℹ️') }} {{ $json.severity }} ALERT | {{ $json.robot_id }} | {{ $json.motor }} Check Required\n",
+        "message": "=<!DOCTYPE html>\n<html>\n<head>\n<style>\n  .card {\n    font-family: 'Segoe UI', Arial, sans-serif;\n    border: 1px solid #e0e0e0;\n    border-radius: 12px;\n    padding: 24px;\n    max-width: 600px;\n    color: #333;\n  }\n\n  .header {\n    border-bottom: 3px solid {{ $json.severity == 'CRITICAL' ? '#ff4d4f' : ($json.severity == 'HIGH' ? '#faad14' : '#1890ff') }};\n    padding-bottom: 15px;\n    margin-bottom: 20px;\n  }\n\n  .severity-tag {\n    background-color: {{ $json.severity == 'CRITICAL' ? '#ff4d4f' : ($json.severity == 'HIGH' ? '#faad14' : '#1890ff') }};\n    color: white;\n    padding: 6px 14px;\n    border-radius: 20px;\n    font-weight: bold;\n    text-transform: uppercase;\n    font-size: 12px;\n  }\n\n  .data-table {\n    width: 100%;\n    border-collapse: collapse;\n    margin: 20px 0;\n    background-color: #fafafa;\n    border-radius: 8px;\n  }\n\n  .data-table td {\n    padding: 12px;\n    border-bottom: 1px solid #eee;\n  }\n\n  .data-label {\n    font-weight: bold;\n    color: #666;\n    width: 40%;\n  }\n\n  .ai-insight {\n    background-color: #e6f7ff;\n    border-left: 5px solid #1890ff;\n    padding: 15px;\n    border-radius: 4px;\n    line-height: 1.6;\n    margin-top: 25px;\n  }\n\n  .footer {\n    font-size: 11px;\n    color: #999;\n    margin-top: 30px;\n    border-top: 1px solid #eee;\n    padding-top: 15px;\n    text-align: center;\n  }\n</style>\n</head>\n\n<body>\n  <div class=\"card\">\n\n    <div class=\"header\">\n      <span class=\"severity-tag\">{{ $json.severity }} Alert</span>\n      <h2 style=\"margin: 10px 0 0 0; color: #1a1a1a;\">\n        Maintenance Action Required\n      </h2>\n    </div>\n\n    <p>\n      Automated sensors have detected a pattern deviation on\n      <strong>{{ $json.robot_id }}</strong>.\n    </p>\n\n    <table class=\"data-table\">\n      <tr>\n        <td class=\"data-label\">Component:</td>\n        <td>{{ $json.motor }}</td>\n      </tr>\n      <tr>\n        <td class=\"data-label\">Detected Issue:</td>\n        <td>{{ $json.issue }}</td>\n      </tr>\n      <tr>\n        <td class=\"data-label\">Health Status:</td>\n        <td>{{ $json.health_percent }}%</td>\n      </tr>\n      <tr>\n        <td class=\"data-label\">Anomaly Probability:</td>\n        <td>{{ $json.anomaly_probability }}%</td>\n      </tr>\n      <tr>\n        <td class=\"data-label\">Timestamp:</td>\n        <td>{{ $json.timestamp }}</td>\n      </tr>\n    </table>\n\n    <div class=\"ai-insight\">\n      <strong style=\"color: #0050b3;\">\n        🤖 AI Reliability Analysis:\n      </strong>\n      <br><br>\n      {{ $json.output }}\n    </div>\n\n    <div class=\"footer\">\n      Generated by XR_Dash Workflow • System ID:\n      {{ $json.robot_id }}<br>\n      © 2026 Industrial Intelligence Systems\n    </div>\n\n  </div>\n</body>\n</html>\n",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        608,
+        -240
+      ],
+      "id": "e998afca-02e5-4235-97e4-e2a77779d368",
+      "name": "Send a message",
+      "webhookId": "4f24d3b8-350a-48b1-9397-11aa4f7c221d",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "AhTHbIIPWvzzqrBu",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        400,
+        -240
+      ],
+      "id": "08dbd5a6-2a6f-456d-a820-887efad37e55",
+      "name": "Merge"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "126bee13-b2d0-41ac-8af8-6294920e5bb3",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "13dd9b8ddb1183a07b8127b56dda300b4f3fe88e4e48a07ee191c176ea549844"
+  },
+  "id": "JQGaxnnyq_73nnd6yhg-y",
+  "tags": []
+}
