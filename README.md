@@ -196,7 +196,7 @@ CREATE TABLE telemetry_logs (
 
 ## 📄 License
 
-Copyright (c) 2026 Sibi Subhash. All Rights Reserved.
+Copyright (c) 2026 Sibi Subhash,Aditya M.S,Fathima Rena. All Rights Reserved.
 
 This repository and its contents are proprietary. No permission is granted to use, 
 copy, modify, distribute, or reproduce any part of this project without the 
