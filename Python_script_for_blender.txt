@@ -1,0 +1,283 @@
+import bpy
+import websocket
+import json
+import math
+from bpy_extras.view3d_utils import location_3d_to_region_2d
+
+motor_map = {
+    "Motor1": "M-20iB25 axis1-1",
+    "Motor2": "M-20iB25 axis2-1",
+    "Motor3": "M-20iB25 axis3-1",
+    "Motor4": "M-20iB25 axis4-1",
+    "Motor5": "M-20iB25 axis5-1",
+    "Motor6": "M-20iB25 axis6-1",
+}
+
+obj_to_motor = {v: k for k, v in motor_map.items()}
+
+motor_rotation = {
+    "Motor1": (1, -180, 180),
+    "Motor2": (1,  -90,  90),
+    "Motor3": (1,  -90,  90),
+    "Motor4": (0,  -90,  90),
+    "Motor5": (1,  -90,  90),
+    "Motor6": (0,  -45,  45),   # ✅ X axis, connected to Motor5
+}
+
+ws = websocket.WebSocket()
+ws.connect("ws://localhost:8765")
+print("✅ Connected")
+
+blink_state      = {"on": True, "counter": 0}
+latest_health    = {}
+latest_telemetry = {}
+active_panel     = {"motor": None}
+base_original_color = {"color": None}
+
+# ----------------------------
+# COLORS
+# ----------------------------
+def set_color(obj, color):
+    if obj.active_material:
+        obj.active_material.diffuse_color = color
+    for slot in obj.material_slots:
+        if slot.material:
+            slot.material.diffuse_color = color
+
+def get_color(status):
+    return {
+        "NORMAL":   (0.0, 1.0, 0.0, 1.0),
+        "LOW":      (1.0, 1.0, 0.0, 1.0),
+        "MEDIUM":   (1.0, 0.5, 0.0, 1.0),
+        "HIGH":     (1.0, 0.2, 0.0, 1.0),
+        "CRITICAL": (1.0, 0.0, 0.0, 1.0),
+        "TRAINING": (0.0, 0.5, 1.0, 1.0),
+    }.get(status, (1.0, 1.0, 1.0, 1.0))
+
+# ----------------------------
+# LOCK BASE COLOR
+# ----------------------------
+def capture_base_color():
+    if base_original_color["color"] is not None:
+        return
+    base = bpy.data.objects.get("M-20iB25 base-1")
+    if not base:
+        return
+    for slot in base.material_slots:
+        if slot.material:
+            c = slot.material.diffuse_color
+            base_original_color["color"] = (c[0], c[1], c[2], c[3])
+            print(f"📌 Base color captured: {base_original_color['color']}")
+            return
+    base_original_color["color"] = (0.05, 0.05, 0.05, 1.0)
+
+def lock_base_color():
+    base = bpy.data.objects.get("M-20iB25 base-1")
+    if not base:
+        return
+    color = base_original_color["color"] or (0.05, 0.05, 0.05, 1.0)
+    if base.active_material:
+        base.active_material.diffuse_color = color
+    for slot in base.material_slots:
+        if slot.material:
+            slot.material.diffuse_color = color
+
+# ----------------------------
+# BILLBOARD
+# ----------------------------
+def face_camera(text_obj):
+    for area in bpy.context.screen.areas:
+        if area.type == 'VIEW_3D':
+            euler = area.spaces[0].region_3d.view_rotation.to_euler()
+            text_obj.rotation_euler = (math.pi / 2, 0, euler.z)
+            break
+
+# ----------------------------
+# MOTION MIRRORING
+# ----------------------------
+def apply_motion(motor, telemetry):
+    obj_name = motor_map[motor]
+    obj = bpy.data.objects.get(obj_name)
+    if not obj:
+        return
+
+    num    = motor.replace("Motor", "")
+    prefix = f"Motor{num}_"
+    rpm    = telemetry.get(prefix + "RPM", 0)
+    vib    = telemetry.get(prefix + "Vibration", 0)
+
+    rpm_norm     = (rpm - 1400) / 50.0
+    rpm_norm     = max(-1.0, min(1.0, rpm_norm))
+    wobble       = math.sin(bpy.context.scene.frame_current * 0.3) * math.radians(vib * 2)
+    smooth       = 0.05
+
+    if motor == "Motor6":
+        # ✅ Y rotation locked to Motor5 (stays physically connected)
+        axis5 = bpy.data.objects.get(motor_map["Motor5"])
+        if axis5:
+            obj.rotation_euler[1] = axis5.rotation_euler[1]
+
+        # ✅ Independent X axis motion from Motor6's own RPM
+        axis_idx, min_deg, max_deg = motor_rotation["Motor6"]
+        mid_rad      = math.radians((min_deg + max_deg) / 2)
+        span_rad     = math.radians((max_deg - min_deg) / 2)
+        target_angle = mid_rad + rpm_norm * span_rad
+        current      = obj.rotation_euler[axis_idx]
+        obj.rotation_euler[axis_idx] = current + (target_angle + wobble - current) * smooth
+        return
+
+    # All other motors
+    axis_idx, min_deg, max_deg = motor_rotation[motor]
+    mid_rad      = math.radians((min_deg + max_deg) / 2)
+    span_rad     = math.radians((max_deg - min_deg) / 2)
+    target_angle = mid_rad + rpm_norm * span_rad
+    current      = obj.rotation_euler[axis_idx]
+    obj.rotation_euler[axis_idx] = current + (target_angle + wobble - current) * smooth
+
+# ----------------------------
+# PANEL
+# ----------------------------
+def get_or_create_panel(motor):
+    name = f"Panel_{motor}"
+    if name in bpy.data.objects:
+        return bpy.data.objects[name]
+
+    bpy.ops.object.text_add(location=(0, 0, 0))
+    text_obj = bpy.context.active_object
+    text_obj.name = name
+    text_obj.data.size = 0.13
+    text_obj.data.align_x = 'LEFT'
+
+    mat = bpy.data.materials.new(name=f"mat_{name}")
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    nodes.clear()
+    emission = nodes.new("ShaderNodeEmission")
+    emission.inputs["Strength"].default_value = 5.0
+    emission.inputs["Color"].default_value = (0.0, 1.0, 0.0, 1.0)
+    output = nodes.new("ShaderNodeOutputMaterial")
+    links.new(emission.outputs["Emission"], output.inputs["Surface"])
+    text_obj.data.materials.append(mat)
+    text_obj.hide_viewport = True
+    return text_obj
+
+def show_panel(motor):
+    joint = bpy.data.objects.get(motor_map[motor])
+    if not joint:
+        return
+
+    info      = latest_health.get(motor, {})
+    telemetry = latest_telemetry
+    text_obj  = get_or_create_panel(motor)
+
+    wx = joint.matrix_world.translation.x
+    wy = joint.matrix_world.translation.y
+    wz = joint.matrix_world.translation.z
+    text_obj.location.x = wx + 0.5
+    text_obj.location.y = wy
+    text_obj.location.z = wz + 0.1
+    face_camera(text_obj)
+
+    num     = motor.replace("Motor", "")
+    prefix  = f"Motor{num}_"
+    temp    = telemetry.get(prefix + "Temp",      "N/A")
+    rpm     = telemetry.get(prefix + "RPM",       "N/A")
+    vib     = telemetry.get(prefix + "Vibration", "N/A")
+    health  = info.get("health_percent",      0)
+    anomaly = info.get("anomaly_probability", 0)
+    status  = info.get("status", "UNKNOWN")
+
+    text_obj.data.body = (
+        f"[ {motor} ]  {status}\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"Health   : {health:.1f}%\n"
+        f"Anomaly  : {anomaly:.1f}%\n"
+        f"Temp     : {temp} C\n"
+        f"RPM      : {rpm}\n"
+        f"Vibration: {vib} g"
+    )
+
+    color = get_color(status)
+    for slot in text_obj.material_slots:
+        if slot.material and slot.material.use_nodes:
+            for node in slot.material.node_tree.nodes:
+                if node.type == "EMISSION":
+                    node.inputs["Color"].default_value = color
+                    node.inputs["Strength"].default_value = (
+                        10.0 if status == "CRITICAL" else 5.0
+                    )
+
+    text_obj.hide_viewport = False
+    active_panel["motor"]  = motor
+
+def hide_all_panels():
+    for motor in motor_map:
+        name = f"Panel_{motor}"
+        if name in bpy.data.objects:
+            bpy.data.objects[name].hide_viewport = True
+    active_panel["motor"] = None
+
+# ----------------------------
+# MAIN LOOP
+# ----------------------------
+def update_robot():
+    global latest_health, latest_telemetry
+
+    try:
+        data             = ws.recv()
+        packet           = json.loads(data)
+        latest_health    = packet.get("health_report", {})
+        latest_telemetry = packet.get("telemetry", {})
+
+        blink_state["counter"] += 1
+        if blink_state["counter"] >= 2:
+            blink_state["on"]      = not blink_state["on"]
+            blink_state["counter"] = 0
+
+        for motor, info in latest_health.items():
+            if motor not in motor_map:
+                continue
+            obj = bpy.data.objects.get(motor_map[motor])
+            if not obj:
+                continue
+
+            # 1. Update color
+            status = info.get("status", "NORMAL")
+            if status == "CRITICAL":
+                color = (1.0, 0.0, 0.0, 1.0) if blink_state["on"] else (0.15, 0.0, 0.0, 1.0)
+            else:
+                color = get_color(status)
+            set_color(obj, color)
+
+            # 2. Apply motion
+            apply_motion(motor, latest_telemetry)
+
+        # 3. Lock base color after all motor colors applied
+        lock_base_color()
+
+        # 4. Panel: show for selected joint
+        selected = bpy.context.active_object
+        if selected and selected.name in obj_to_motor:
+            motor = obj_to_motor[selected.name]
+            show_panel(motor)
+        else:
+            hide_all_panels()
+
+    except Exception as e:
+        print(f"⚠️ Error: {e}")
+
+    return 0.5
+
+# ----------------------------
+# START
+# ----------------------------
+for obj in bpy.data.objects:
+    if obj.name.startswith("Panel_"):
+        bpy.data.objects.remove(obj, do_unlink=True)
+
+capture_base_color()
+
+bpy.app.timers.register(update_robot)
+print("🚀 Motion mirroring + click inspect started!")
+print("💡 Click any joint to inspect | base-1 color locked")
